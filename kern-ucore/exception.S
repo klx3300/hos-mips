@@ -320,6 +320,8 @@ __exception_vector:
 	RVECENT(ramReserved,29)
 	RVECENT(ramReserved,30)
 	RVECENT(ramReserved,31)
+  # imzhwk: or this is 0x100
+  # the only exception jumps here is CacheError
 	XVECENT(ramExcHandle_general, 32) 
 	RVECENT(ramReserved,33)
 	RVECENT(ramReserved,34)
@@ -336,6 +338,8 @@ __exception_vector:
 	RVECENT(ramReserved,45)
 	RVECENT(ramReserved,46)
 	RVECENT(ramReserved,47)
+  # this is the general exceptions, which
+  # will be all redirected to here, 0x180
   XVECENT(ramExcHandle_general, 0x180) 
 	RVECENT(ramReserved,49)
 	RVECENT(ramReserved,50)
