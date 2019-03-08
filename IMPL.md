@@ -175,5 +175,121 @@ A process is at this state when it's just finished creation or be preempted beca
 
 Note: the exact words we use is different from the actual HOS code: when a HOS process is in `PROC_RUNNABLE` state, the process is either runnable but aren't running currently, or it's the current running process. In this chapter, when we refer to *runnable state*, we are referring to the not-running state of `PROC_RUNNABLE` processes.
 
-The last function `do_fork` calls, `wakeup_proc`, is responsible for changing the state of given process to `PROC_RUNNABLE`.
+The last function `do_fork` calls, `wakeup_proc`, is responsible for changing the state of given process to `PROC_RUNNABLE`. The detailed operations of this function will be left for further discussions in following chapters.
+
+One of the runnable processes is chosen by the scheduler when one of the processes exhausted its assigned time slice or start blocking by I/O or waiting for semaphore or whatever reason. The chosen process will start running by `proc_run`.
+
+The most interesting and funny designed part of HOS is perhaps this function, `proc_run`. Unlike `JOS`, which executing `env_run` directly resulted in switching back to user space, the `proc_run` in HOS is to switch between the kernel space of two processes, using the `context` member of process structure. Note the `load_rsp0` function does nothing, the real work of switching kernel stack between processes is done by `set_pagetable`. The `switch_to` routine is written in assembly, which saves the current kernel space context into previous context structure, and restore the registers using the next context structure, effectively switching to another process. Then, this function will return to `schedule()`, and eventually back to the trap handler, which do the work of switching back to user space process.
+
+- Don't understand the benefit of implementing `proc_run` in this way. It's restricting the flexibility of process switching, as things must eventually route back to the interruption handler, or the switching will fail somehow.
+
+## 0x08 Process Life Cycle: Running
+
+The property of a running process is much the same of a runnable process, so we focus on the procedure of exhausting its assigned time slice.
+
+Discussed above, the timer interrupt handler executes `run_timer_list` to tick the system timer service. In this routine, beside the work of ticking every timer set up in system and **pulling up** processes, the last thing it does is to call `sched_class_proc_tick` to tick the scheduler about the current executing process. If the scheduler decided that the running process already exhausted its time slice, it will set the `need_resched` member of its process structure to `1`.
+
+Upon returning to the handler `mips_trap`,  it will discover that, and explicitly run `schedule` to do reschedule. The `schedule` will clear the `need_resched` bit, invoke the scheduler to get next running process, and switch to it.
+
+There are several synchronization system services such as semaphores will put process out of running/runnable state, but these are left for discussions in IPC related chapters.
+
+## 0x09 Process Life Cycle: Dying
+
+Extinction is part of the essence of anything, a HOS process never have the luck to evade from that.
+
+The work of exiting the whole process is done by `do_exit`. But let's first look at the `do_kill` routine, which is used for system kill process, but instead of sending signals like other unix-like OSes, the `do_kill` of HOS is only used for killing any valid process, regardless of its state.
+
+The `do_kill` routine first search for the corresponding process structure, and passing them to the `__do_kill` workhorse along with the error code. The `__do_kill` set the `flags[PF_EXITING]` bit of the process structure, and forcefully wake it up by invoking `wakeup_proc`. When rescheduling hits this process, or it's encountering any interrupts, the handler `mips_trap` will found that this process is in `PF_EXITING` state, and call `do_exit` to finish the work of killing it. The reason `do_kill` must wake the process up is that the `do_exit` can only terminate the current running process, and requiring the process is in runnable state.
+
+Now let's look at the `do_exit` routine. First, this process iterate through all processes in the same thread group, killing them except the exiting process using `__do_kill`. Then, call `do_exit_thread` to set the exiting code of the current process, and finally `__do_exit` to complete the cleanup work. The `__do_exit` do the following things in turn:
+
+- Use `put_pgdir` to free the space occupied by the process... or did it?
+  - By reading the code, it's very easy to discover that this function only releases the very page that occupied by page directory. The process text segment, data segment, stack, and all page tables are leaked.
+  - This is a very serious kernel memory leak, and will significantly reduce the usability of the operating system. Am I missing the code that resolves this problem? Let me know once you found it.
+- Clearing other system service structures, including singals, filesystems, semaphores.
+- Setting current process state to `PROC_ZOMBIE`, and notify its parent if it's waiting for children signals.
+- Removing this process from its thread group.
+- Do the reparenting work for its child: either another process in the same thread group of current process, or the init process.
+- Wake up every process in the event box wait queue of this process using `WT_INTERRUPTED`, the detailed behavior will left for the IPC chapter.
+- Call `schedule` to select another runnable process to run.
+
+## 0x?? Scheduler
+
+Although scheduler can affect modern OS performance significantly, the HOS scheduler is a simple Round-Robin scheduler located in *sched_RR.c*, and doesn't have much interesting details to talk about. Let's skip this part.
+
+## 0x0A Synchronization: Semaphores
+
+HOS implements semaphores as one of the inter-process synchronization methods.To understand how this is working with the scheduler to provide a blocking behavior, we can begin at looking the corresponding system calls for semaphores. Currently, the HOS provide the following system calls for semaphore operations: `sem_init`, `sem_post`, `sem_wait`, `sem_free`, `sem_get_value`. the `post` operation increases the value of given semaphore, while `wait` operation decreases it, and block the calling process if the semaphore value is lower than zero.
+
+One implementation decision which confuse me much is the use of `sem_undo`. According to its description, the reason uCore using this mechanism is to prevent user semaphore deadlock when one of the processes holding it crashes unexpectedly.
+
+But undo the modification to restore the semaphore to last consistent state isn't a good solution. I don't want to talk about it much as it's off topic, but readers should consider semaphores with this mechanism is using with producer-consumer model while passing content using shared memory.
+
+But it seems this confusing mechanism isn't implemented currently, which saves me a lot time required to understand the philosophy behind it.
+
+### Overview, Creation, Destruction
+
+In *sem.h*, there's three structure about semaphores, `semaphore_t`, `sem_undo_t`, and `sem_queue_t`. The relationship of them is as follows:
+
+```
+PROC -> sem_queue_t -> semaphore_t
+                  | -> sem_undo_t (list) -> semaphore_t
+```
+
+The semaphore of `sem_queue_t` is used at kernel to guarantee the atomic operation of itself, while newly created semaphores goes to the `sem_undo_t` list. The returned semaphore ID is created by the allocated memory address for the semaphore minus the kernel base address.
+
+The `count` member in `semaphore_t` is used for reference counter, increases when the semaphore queue is duplicated, and all semaphores inside it is referenced another time.(When? Hint: `fork()`).
+
+When a semaphore is going to be destroyed, the `valid` member of `semaphore_t` will be cleared first, and every process that waiting for this semaphore is woken up using `WT_INTERRUPTED`. The invalid semaphore isn't going to be destroyed immediately, but whenever semaphore searching(will be invoked on almost every semaphore operation) reached an invalid semaphore, which will decrease its reference counter and remove the `sem_undo_t` from the list of current process, and eventually free it when reference counter reaches `0`.
+
+###  Consume(`sem_wait`) and Produce (`sem_post`)
+
+When a process is trying to decrease a semaphore, it uses the `sem_wait` system call. The actual workhorse of this system call is `usem_down`, which operates on `sem_undo_t`.
+
+To provide a timeout mechanism, the `usem_down` creates a timer using system timer services, and pass it to the `__down` workhorse to complete the final steps of setting up process status.
+
+---
+
+### Interlude: Timer Service
+
+HOS provide a system timer service in a relatively simple manner: when you setup a timer using `add_timer`, the timer will be added into a linked list, which the expire time of every timer is a relative value of previous timer, in a ordered manner. Every time the clock interrupt happen, the kernel would iterate through this list, trigger every timer that expired.
+
+There're two kinds of timer provided by kernel. One is the simple timer, which will wakeup the process which set up it. Another type is a `linux-liked` timer, which accepts a timeout callback function, and will be executed by the kernel when it's expired. Semaphores utilize the first type.
+
+---
+
+The `__down` will finally complete the decrease of specified semaphore, and set current process to wait this semaphore by inserting the current process into the wait queue of the semaphore using `wait_current_set`. After that, it calls `ipc_add_timer` to setup the timer, then select a new process by calling `schedule`.
+
+- `wait_current_set` should be better interpreted as `set_current_wait`, which not only insert current process into specified wait queue, but set the process state to waiting. Interesting naming style, I have to admit.
+- If the semaphore value is equal to 0, the `__down` will not actually decrease it.
+
+When this process is woken up, then `__down` will first remove the waiting state and the timer, then check the reason of waking by `wakeup_flags` of the `wait_t` structure passed into the `wait_current_set`.
+
+The `__up` increases the semaphore value, and use the `wakeup_wait` function to wake up the first process that is waiting for this semaphore to be available. The `wakeup_wait` function will finish the job of removing the woken process from the wait queue.
+
+-  Much alike the `__down`, if there's process waiting for this semaphore, the `__up` will not increase the semaphore value.
+
+## 0x0B Communication: Event
+
+HOS provides two inter-process communication(**IPC**) mechanism, but one of them isn't used. We introduce the one that's currently exposed to user space programs first: the `event` mechanism.
+
+The related functions is located in *event.c*.
+
+When a process wants to wait for an event to be sent to itself, it calls the `sys_event_recv` system call, which dispatches to workhorse `ipc_event_recv`. The `ipc_event_recv` performs parameter sanity check, and creates timer according to the `timeout` provided, then call `recv_event` to finalize the works and process states.
+
+The `recv_event` will firstly check whether there's events already waiting on the wait queue of `current->event_box`, which is a member of process structure. If there is, copy this back to the receiving process, and wake the sender process up to notify it that the sending is succeeded.
+
+Else, the receiving process will be put to blocking state, the created timer is added to the system timer list to ensure the timeout mechanism, and call `schedule` to run another process. The woken up checks is much alike the semaphore part.
+
+- Note: receiving process is not added to any wait queue!
+
+Then let's focus on senders. The corresponding dispatched function is `ipc_event_send`, which also performs parameter sanity check at first. Then, this function will wake up the specified receiver in the sending parameter, and then set the `current->event_box.event` to the event this process is sending, create timer, call the `send_event` to finalize its works.
+
+`send_event` put the sender process into the wait queue of the receiver's event box. When the receiver is woken up from receiving event, it will pull out the event from its event box, and wake the sender back from the waiting queue, thus the two side is acknowledged the success of event passing.
+
+By the way, the only data this event mechanism can send is one 32-bit integer.
+
+## 0x0C: Communication (Not Used): MessageBox
+
+This is the IPC mechanism that's currently not used in user space. Corresponding system calls aren't found on system call dispatching interface.
 
