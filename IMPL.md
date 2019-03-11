@@ -293,3 +293,175 @@ By the way, the only data this event mechanism can send is one 32-bit integer.
 
 This is the IPC mechanism that's currently not used in user space. Corresponding system calls aren't found on system call dispatching interface.
 
+An important note is that although this mechanism is designed for user space program use, but it hasn't expose any system call interface to user space programs. So when describing interfaces, I will use kernel space functions.
+
+Parameter sanitizing is mostly done at the first layer of wrapper. No detailed description about this step anymore.
+
+### Initialization
+
+The whole-service initialization is done by `mbox_init`. This function simply initialize an array of pointers to mboxes, and a semaphore for exclusive operations of this array.
+
+### Per-MBOX Initialization
+
+When a process wish to allocate a mbox for its use, this process calls `ipc_mbox_init`. This function in turn calls `new_mbox`, which is the real workhorse.
+
+All free message boxes is stored in a list called `free_mbox_list`. If this list is empty, `new_mbox` will try to allocate a page, fill it with empty message boxes, and link all of them into the free list. If there's still empty mboxes, this function will fetch the first item in the list, and remove it. The max slots of message box returned is set as specified in function parameter.
+
+The message boxes is created at `CLOSED` state, with `mbox->inuse == 0`, indicating it's free.
+
+### Receiving Messages
+
+When a process wants to receive message from a message box, it must provide the id of the message box, a buffer of `struct mboxbuf` for the operating system to store the message, and a timeout to ensure the system won't get stuck. It uses these parameters to call the interface `ipc_mbox_recv`, which in turn calls `recv_msg` to actually do the message fetching work.
+
+The `recv_msg` will increase the reference counting field of given message box `mbox->inuse`, and wait until message count of the message box `mbox->slots` is not 0 by put the current process into the wait queue of given message box, and put itself into blocking state with a timer is running to ensure the timeout will work. If this process is woken up by closing the message box or timed out, the reference counter will be decreased(and it surely will get decreased when a message is successfully fetched), and then check if it's the last one who waiting for this mbox by checking the reference counter and make sure this message box is closing. If the two condition satisfied, this process will do the finalizing work of putting this message box into free state.
+
+If there's a message for the `recv_msg` to fetch, it will call the `pick_msg` function to do the message fetching work, which will ensure no buffer overflow will happen. If the `pick_msg` failed, the current process will notify the next process in the waiting list without really consuming the message from the message list. The `pick_msg` will also notify the first sender process in the sender waiting queue if the message fetching is successful. The real role of this waiting queue will be described in next section.
+
+Returning to the `ipc_mbox_recv`, this function will complete the state of copying the kernel data structure out of kernel space, which uses `store_msg` at the workhorse of storing data carried by the message to user provided address. If things went wrong, it will insert this message back to the message box by calling `add_msg`. Finally, it will free up the space occupied by the message in kernel space using `free_msg`.
+
+> Note: HOS kernel has a buddy allocator to satisfy kernel space fine-grained dynamic memory allocation.
+
+### Sending Messages
+
+When a process wants to send message to a message box, it must provide the id of the message box, the message it wants to send, and a timeout, much alike the receiving process.
+
+The whole process of sending message is quite alike receiving, so I will only describe it briefly. The sending workhorse is `send_msg` which put the message into the message box message slots. If the slots is full, it will setup timer, and add itself into the sender waiting queue. If it's woken up, it will check whether it's possible to add message into the slots. The sender also take part in the reference counting thing.
+
+### Closing Message Boxes
+
+When a process requires to close the message box, the service will clear out every single messages in the slots, and set the message box state to `CLOSING`. Then, it will wake up every process in the waiting queue using `WT_INTERRUPTED`, to trigger the reference counting and final release process described above.
+
+- Note: The current implementation allows attacks that iterating through the whole message box id space and closing each of them, which will result in this service unusable.
+
+## 0x0D: Initial Ramdisk & IDE Controller
+
+Now we came to the filesystem part. But before we get into the operating system abstractions, let's take a look at the low-level interfaces to hardware.
+
+HOS provide support for multiple hard disk controller, and if one needs to implement one, it can implement the `struct ide_device` interface and required functions, then manually add their initialization process into the `ide_init` in *ide.c*. Currently, the only disk controller is for the initial ramdisk (commonly called **initrd**) compiled into the kernel image at build time. The controller for this only provides basic bookkeeping for implementing a disk controller, as it is actually fetching data directly from memory. This is simply no much things to talk about, so we better just jump to the next part.
+
+## 0x0E: Filesystem: A Process' Perspective
+
+This is the last big part of the HOS, and I'm going to analysis it using a top-down approach.
+
+In a process' process structure, the member `fs_struct` is used to record filesystem related information. The type itself, `struct fs_struct`, is defined at *fs.h*. It contains a `fs_count` used for reference counting when cloning with shared filesystem operations, a `fs_sem` used for ensuring filesystem operation atomicity, the `pwd` records the current working directory, and `filemap` records every file opened by this process. A implementation detail worth noticing is that for every `fs_struct` creation, there's another space put right after the end address of this structure, used to store the actual content of `filemap`. The `filemap` pointer is actually pointing to that space. The total space (`fs_struct + filemap`) is 2 pages.
+
+For each file, the corresponding structure `struct file` has:
+
+- `status` field, to record the current state of the file.
+- `readable & writable`, to enforce the permission control.
+  - But where's the `executable`?
+- `fd`, is the file descriptor associated with the opened file. Unlike the `*nix`, one file descriptor in HOS only associates with one file description, aka `struct file`.
+- `pos`, which used the current operation position of the file.
+- `node`, is the pointer to the `inode` structure in filesystem corresponding to this opened file.
+- `open_count`, for atomic operations.
+
+## 0x0F: Filesystem: the Virtual Filesystem Switcher, or VFS
+
+The file operation system calls is at *sysfile.c*. Most dispatching path for file operations is much the same, so it's only necessary to describe the dispatching path in a general manner as this is all about the VFS, and detailed filesystem implementation will be shown at following chapters.
+
+Take `open` as the example, we can see how the VFS switching between actual filesystem implementations.
+
+The system call interface, `file_open`, is only responsible for setting up the `struct file`, will actual works is dispatched to the VFS operation `vfs_open`.
+
+In `vfs_open`, there's a check for the `O_CREAT` flags, and take appropriate operations to make the file created when the file is not exist. But for now, let's just ignore them for clearance.
+
+The `vfs_open` first need to know the exact `inode` structure which represents the file, which provided by the `vfs_lookup`.
+
+The `vfs_lookup` firstly use `get_device` to determine the direct device `inode` of given path. The path seems to have two possible form: `/path/to/file` or `dev:/device/path/to/file`. The `get_device` distinguishes from the each type of path, and call the corresponding VFS operations to determine between them. The significant complexity difference of HOS to other `*nix` operating systems is that it seems the HOS doesn't provide the `mount` operation in a to-directory manner, which significantly simplify the device `inode` lookup process.
+
+Returning to `vfs_lookup`, now we got the device relative address of the file and the device `inode`, we can start looking up for the exact file `inode`. There's a special case that given path is the root directory of the given device, then the device `inode` will be returned directly. The `vfs_lookup` calls `vop_lookup`, which dispatches to the corresponding operation function pointers in `struct inode_ops` in the `inode` when it's first filled when creating it. These function pointers points to specific filesystem implementations of these functions, which actually **switched** to that filesystem.
+
+Now the VFS dispatching path is very clear to us:
+
+```text
+| FOP_SYSCALLS | -> | VFS OPERS | -> | VOP OPERS | -> | ACTUAL FILESYSTEM |
++--------------+    +-----------+    +-----------+    +-------------------+
+ This is the         VFS combines     Built in the     Handles actual oper-
+ user interface      low level        inodes, dis-     ations to the hard-
+ handles parame-     VOPs to impl.    patching VOP     wares.
+ ter sanitizing      user inter-      calls to 
+ and some other      faces.           actual file-
+ works.                               system ops.
+```
+
+## 0x10: Filesystem Operations: VFS Operations and Some Details
+
+This part provides some in-detail descriptions of every VFS operation and how it combines the VOP operations to provide a user interface. These operations are in the *vfsfile.c*, and if the reader are very familiar with `*nix` file operations, it will be very simple to understand these content.
+
+First of all: there's two reference counts maintained at the VFS level and below: the `reference counts` record how many times a pointer to that `inode` is created, which gives a hint about when this kernel structure can be destroyed without causing any wild accesses. The `open counts` record how many times an `open` operation is taken on that inode, which gives a hint about when can the corresponding file can finally be closed on filesystem level. To avoid confusing, the counting operations will not be included in this document.
+
+### vfs_open
+
+As described above, much of the open flags is handled at the VFS level, which will call `vop_create`, `vop_truncate`, and `vop_open` according to different open flags.
+
+### vfs_close
+
+Decreases both reference counter and open counter. The `vop_open_dec` will check the open counter and call `vop_close` eventually.
+
+### vfs_unlink
+
+The `vop_unlink` requires providing the direct parent of the file.
+
+### vfs_rename
+
+This function is a general `mv` interface, and calls `vop_rename` which require providing both the old and new directory `inode` and filenames.
+
+### vfs_link
+
+This is for the hard link, which calls `vop_link`.
+
+### vfs_symlink
+
+Soft links, `vop_symlink`.
+
+- A notable implementation decision is, the HOS give the implementation of symbolic links to each filesystem.
+
+### vfs_readlink
+
+`vop_readlink`.
+
+### vfs_mkdir
+
+`vop_mkdir`.
+
+
+
+## 0x11 Filesystem: VFS, Devices & Filesystems Initialization
+
+After having a detailed picture about how user-space requests is dispatched to the corresponding filesystem implementation, now we may come to discover how various filesystem integrated with the VFS.
+
+The initialization of the filesystem service of HOS is located in *vfs/fs.c*, `fs_init()`. This initialization function is going through every separate initialization functions of each unit, including `VFS`, `device`, `pipe`, and `sfs`.
+
+The corresponding initialize procedure is located at *vfs/vfs.c*, `vfs_init()`. This function first initializes the semaphore for VFS atomicity, and calls `vfs_devlist_init` to initialize the device list of VFS.
+
+the `vfs_dev_t` structure is used to record the device informations. Its members are:
+
+- `devname` is pretty self-explaining: the device name. It's provided when the device is first added to the device list using `vfs_do_add`.
+- `devnode` is the root `inode` for the device, also set up when calling `vfs_do_add`. Note the dispatching need the `struct inode_ops` in device root `inode`, so this is necessary.
+- `fs` records the filesystem related information and possible operations about the specific filesystem associated with the device.
+  - More specifically, the current `struct fs` includes informations for `pipefs` and `sfs`, type magic for `pipefs` and `sfs`, and some filesystem generic operations such as `sync`, `get_root`, `umount` and `cleanup`.
+- `mountable`, which determines the mountability of this device.
+  - Note in HOS, the mountability actually determines whether this device should go through a mount-sync-unmount pair when it's getting used. That is, it's possible to assign a filesystem to a unmountable device, if the filesystem is implemented in a *stateless* manner.
+
+The initialization process only cleans the linked list, and create a semaphore to allow exclusive access. The same process is also taken when the filesystem type list is initialized.
+
+Back to `fs_init`, the next part of the initialization is various devices. Currently, the following devices is implemented in HOS:
+
+- `null`: simulates `*nix ` `/dev/null`, which everything writes to it is discarded, and reading to it will result in a `EOF`.
+- `stdin`: the standard input, read from COM input.
+- `stdout`: the standard output, write to the COM output.
+- `disk0`: the initrd device, which dispatches calls to the IDE `DISK0`.
+- `disk1`: for the potential flash memory support, which currently not implemented.
+
+The device initialization creates root inodes for every devices added to the device list, and setup the appropriate fields in the root inodes to ensure operations to the devices is correctly routed to them.
+
+Then, it's the filesystem initialization process. There's only 2 filesystems in HOS currently. They are `pipefs` and `sfs`.
+
+### PipeFS
+
+The `pipefs` is the virtual filesystem that provides the `*nix` `named pipes` functionality. The valid filename is in the following format: `[r|w|_].*`, which the first character is used for access permission control, and the followed characters are the name of the pipe. Reading the pipe will result in read out the data previously written to, and if the pipe is empty, the read will blocked. The write operations should block in the same manner when the pipe is full, much alike the `named pipes` behavior. More detailed implementation isn't quite matters here, so these codes are left to the readers to explore on themselves.
+
+### SFS
+
+The SFS, or *simple FS* as guessing how it's getting named, provides basic functionality to operate as a real filesystem that works on block devices. The implementation of SFS spans over more than 1,000 lines of code, and it's not critical to the whole system. So the implementation details of SFS will be left until I have some more time to dig deeper into this OS.
+
