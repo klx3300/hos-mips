@@ -23,10 +23,12 @@ void __noreturn kern_init(void)
 	pic_init();		// init interrupt controller
 	cons_init();		// init the console
 	clock_init();		// init clock interrupt
+	kprintf("imzhwk: Disabling interrupts to perform\n       initialization process without noises..\n");
+	intr_disable();     // disable interrupt
 
 	check_initrd();
 
-	const char *message = "OS is loading ...\n\r\n\r";
+	const char *message = "Welcome to HOS!\n\r\n\r";
 	kprintf(message);
 	print_kerninfo();
 

@@ -125,11 +125,15 @@ static void serial_init(void)
         //pic_enable(KEYBOARD_IRQ);
 }
 
+#define GXEMUL_COM1 ((uintptr_t)0x90000000)
+
 static void serial_putc_sub(int c)
 {
 	if ((inw(COM1 + COM_IER) & COM_IER_RDI) == 0) delay();
     //delay();
     outw(COM1 + COM_THR, c & 0xFF);
+	// for QEMU trick
+	outw(GXEMUL_COM1, c & 0xFF);
     delay();
 }
 
