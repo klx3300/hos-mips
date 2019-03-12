@@ -132,8 +132,9 @@ static void serial_putc_sub(int c)
 	if ((inw(COM1 + COM_IER) & COM_IER_RDI) == 0) delay();
     //delay();
     outw(COM1 + COM_THR, c & 0xFF);
-	// for QEMU trick
+#ifdef BUILD_GXEMUL
 	outw(GXEMUL_COM1, c & 0xFF);
+#endif
     delay();
 }
 
@@ -152,6 +153,10 @@ static void serial_putc(int c)
 /* serial_proc_data - get data from serial port */
 static int serial_proc_data(void)
 {
+#ifdef BUILD_GXEMUL
+	int c = (*(unsigned char*)(GXEMUL_COM1)) & 0xFF;
+	if(c == 0) return -1;
+#else
     int c;
 
     delay();
@@ -160,6 +165,7 @@ static int serial_proc_data(void)
     delay();
     c = inw(COM1 + COM_RBR) & 0xFF;
     delay();
+#endif
 
     if (c == 127) {
         c = '\b';
