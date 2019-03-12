@@ -173,6 +173,16 @@ static int serial_proc_data(void)
     return c;
 }
 
+// imzhwk: this is for gxemul emulator.
+// no need for comment, because the effective
+// handler dispatching already have this!
+void gxemul_input_intr(void){
+	int c = cons_getc();
+	// why previous HOS guys not make a header for this???
+	extern void dev_stdin_write(char c);
+	dev_stdin_write(c);
+}
+
 void serial_int_handler(void *opaque)
 {//corrected by xiaohan: this is actually not serial interrupt handler!
  //This is in fact External Interrupt Controller's interrupt handler!
