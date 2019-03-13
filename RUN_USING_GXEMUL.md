@@ -23,7 +23,10 @@
    1. 如果你不确定的话，执行 `mips-mti-elf-gcc --version` 检查你是否正确设置。
    2. 同样，执行 `gxemul -H` 可以检查你的 GXEMUL 是否已正确安装。
 
-4. HOS 同样需要使用我魔改过的版本。
+4. HOS 同样需要使用魔改过的版本。不过也可能已经合并进入 mainline，具体参阅 HOS 的提交记录。
+
+   1. 检查 `kern-ucore/Makefile.build`,  `TARGET_CFLAGS += -DBUILD_GXEMUL` 这行需要取消注释。
+   2. 如果没有这一行，请在其他 `TARGET_CLFAGS += ...` 行的后面，实际构建代码的前面添加。
 
 5. 在 HOS 根目录下执行以下命令编译内核：
 

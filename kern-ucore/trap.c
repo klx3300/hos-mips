@@ -327,7 +327,7 @@ int do_pgfault(machine_word_t error_code, uintptr_t addr)
 
 	int ret = -E_INVAL;
 
-	assert(error_code == 3);
+	if(error_code != 3) goto failed;
 
 	pte_perm_t perm, nperm;
 	ptep_unmap(&perm);
