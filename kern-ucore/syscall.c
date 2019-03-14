@@ -322,6 +322,10 @@ void syscall(void)
 			arg[2] = tf->tf_regs.reg_r[MIPS_REG_A2];
 			arg[3] = tf->tf_regs.reg_r[MIPS_REG_A3];
 			arg[4] = tf->tf_regs.reg_r[MIPS_REG_T0];
+#ifdef K_DEBUG_TRACE_SYSCALL
+            kprintf("[ SYSCALL %d(%08x, %08x, %08x, %08x, %08x) ]\n", 
+            num, arg[0], arg[1], arg[2], arg[3], arg[4]);
+#endif
 			tf->tf_regs.reg_r[MIPS_REG_V0] = syscalls[num] (arg);
 			return;
 		}

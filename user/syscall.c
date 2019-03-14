@@ -21,7 +21,7 @@ struct _syscall_args {
 	uint32_t external;
 };
 
-extern int _u_syscall_intr(struct _syscall_args* sargs, struct _syscall_args* ssaves);
+extern int _u_syscall_intr(struct _syscall_args* sargs);
 
 uintptr_t syscall(int num, ...)
 {
@@ -34,7 +34,6 @@ uintptr_t syscall(int num, ...)
 	}
 	va_end(ap);
 	struct _syscall_args sargs = {0};
-	struct _syscall_args ssaves = {0};
 	sargs.num = num;
 	sargs.a0 = arg[0];
 	sargs.a1 = arg[1];
@@ -53,7 +52,7 @@ uintptr_t syscall(int num, ...)
 	// 	      :"r"(num), "r"(arg[0]), "r"(arg[1]), "r"(arg[2]),
 	// 	      "r"(arg[3]), "r"(arg[4])
 	// 	      :"a0", "a1", "a2", "a3", "v0", "t0");
-	ret = _u_syscall_intr(&sargs, &ssaves);
+	ret = _u_syscall_intr(&sargs);
 
 	return ret;
 }

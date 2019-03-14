@@ -17,11 +17,16 @@ struct command {
 	int (*func) (int argc, char **argv, struct trapframe * tf);
 };
 
+int kmonitor_continue(int argc, char **argv, struct trapframe *tf){
+	return -1;
+}
+
 static struct command commands[] = {
 	{"help", "Display this list of commands.", mon_help},
 	{"kerninfo", "Display information about the kernel.", mon_kerninfo},
 	{"currproc", "Display the current process.", print_current_proc},
 	{"allproc", "Display all processes", print_all_proc},
+	{"continue", "Continue Kernel Execution", kmonitor_continue}
 };
 
 /* return if kernel is panic, in kern/debug/panic.c */
@@ -156,6 +161,7 @@ int mon_kerninfo(int argc, char **argv, struct trapframe *tf)
 int print_current_proc(int argc, char** argv, struct trapframe* tf){
 	struct proc_struct *current = pls_read(current);
 	dump_procstruct(current);
+	return 0;
 }
 
 int print_all_proc(int argc, char** argv, struct trapframe* tf){
@@ -164,4 +170,5 @@ int print_all_proc(int argc, char** argv, struct trapframe* tf){
 		struct proc_struct *proc = le2proc(iter, list_link);
 		dump_procstruct_short(proc);
 	}
+	return 0;
 }

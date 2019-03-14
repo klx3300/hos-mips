@@ -131,6 +131,10 @@ static inline void tlb_refill(uint32_t badaddr, pte_t * pte)
     //kprintf("*pte+1=0x%08x\n\r",*(pte+1));
 //#ifdef MACH_QEMU
     //kprintf("badaddr=0x%08x\n\r",badaddr);
+#ifdef K_DEBUG_TLB_REFILL_PTE
+    kprintf("[ <- TLB Replace with (+0) %08x ]\n", *pte);
+    kprintf("[ <- TLB Replace with (+1) %08x ]\n", *(pte+1));
+#endif
     tlb_replace_random(0, badaddr & THUMIPS_TLB_ENTRYH_VPN2_MASK,
                pte2tlblow(*pte), pte2tlblow(*(pte + 1)));
 /*#elif defined MACH_FPGA

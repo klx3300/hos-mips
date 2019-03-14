@@ -17,11 +17,13 @@ int close(int fd)
 
 int read(int fd, void *base, size_t len)
 {
+	// cprintf("[ USERLIB DEBUG: read() ]\n");
 	return sys_read(fd, base, len);
 }
 
 int write(int fd, void *base, size_t len)
 {
+	// cprintf("[ USERLIB DEBUG: write() ]\n");
 	return sys_write(fd, base, len);
 }
 

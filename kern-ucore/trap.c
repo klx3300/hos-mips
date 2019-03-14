@@ -177,8 +177,9 @@ static void handle_tlbmiss(struct trapframe *tf, int write, int perm)//YX )
 //	kprintf("## enter handle_tlbmiss %d times\n\r", entercnt);
 
 #ifdef K_DEBUG_TLBMISS_ADDR
-	kprintf("[ TLB Miss at 0x%08x ]\n", tf->tf_vaddr);
+	kprintf("[ TLB Miss at 0x%08x, EPC 0x%08x ]\n", tf->tf_vaddr, tf->tf_epc);
 #endif
+	if(tf->tf_epc == 0x10002d40) monitor(NULL);
 
 	int in_kernel = trap_in_kernel(tf);
 	assert(current_pgdir != NULL);
