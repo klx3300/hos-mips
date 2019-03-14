@@ -40,7 +40,8 @@ sys_exec(uint32_t arg[]) {
     const char *name = (const char *)arg[0];
     const char **argv = (const char **)arg[1];
     const char **envp = (const char **)arg[2];
-    return do_execve(name, argv, envp);
+    int ret = do_execve(name, argv, envp);
+    return ret;
 }
 
 static uint32_t

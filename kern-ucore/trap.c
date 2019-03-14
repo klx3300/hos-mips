@@ -79,6 +79,7 @@ void print_trapframe(struct trapframe *tf)
     PRINT_HEX("\r\n Cause: ", tf->tf_cause);
     PRINT_HEX("\r\n EPC ", tf->tf_epc);
     if (!trap_in_kernel(tf)) {
+		kprintf("\r\n From User Process[%d/%d]:", current->pid, current->tid);
         kprintf("\r\nTrap in usermode: ");
     } else {
         kprintf("\n\rTrap in kernel: ");
@@ -175,6 +176,10 @@ static void handle_tlbmiss(struct trapframe *tf, int write, int perm)//YX )
 	entercnt++;
 //	kprintf("## enter handle_tlbmiss %d times\n\r", entercnt);
 
+#ifdef K_DEBUG_TLBMISS_ADDR
+	kprintf("[ TLB Miss at 0x%08x ]\n", tf->tf_vaddr);
+#endif
+
 	int in_kernel = trap_in_kernel(tf);
 	assert(current_pgdir != NULL);
 	//print_trapframe(tf);
@@ -189,6 +194,19 @@ static void handle_tlbmiss(struct trapframe *tf, int write, int perm)//YX )
 		//so a vmm pgfault will trigger 2 exception
 		//permission check in tlb miss
 		ret = pgfault_handler(tf, badaddr, get_error_code(write, pte));
+		if(ret){
+			const char *KERN = "kernel", *USER = "user";
+			kprintf("Page Fault: %s ", in_kernel ? KERN : USER);
+			if(ret == -E_INVAL){
+				kprintf("Invalid ErrCode\n");
+			} else if (ret == -E_NO_MEM){
+				kprintf("Kernel Memory Exhaustion\n");
+			} else if (ret == -E_FAULT){
+				kprintf("Protection Violation\n");
+			} else {
+				kprintf("Unknown Error %d\n", ret);
+			}
+		}
 	} else {		//tlb miss only, reload it
 		/* refill two slot */
 		/* check permission */
@@ -213,10 +231,15 @@ static void handle_tlbmiss(struct trapframe *tf, int write, int perm)//YX )
 
 exit:
 	if (ret) {
-		print_trapframe(tf);
 		if (in_kernel) {
-			panic("unhandled pgfault");
+			print_trapframe(tf);
+			panic("Kernel TLB Failure/Page Fault");
 		} else {
+			// for debug purpose, let's just get into this.
+#ifdef K_DEBUG_INSPECT_USER_PGFAULT
+			monitor(tf);
+#endif
+			kprintf("User Page Fault: va %08x, KILLING\n", tf->tf_vaddr);
 			do_exit(-E_KILLED);
 		}
 	}

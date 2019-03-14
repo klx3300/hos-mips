@@ -8,6 +8,7 @@ void dump_pflags(uint32_t pflags);
 void dump_pwaitstate(uint32_t waitstate);
 
 void dump_procstruct(const struct proc_struct* ps);
+void dump_procstruct_short(const struct proc_struct* ps);
 
 enum PROC_WAITS_STRS_IDX{
     PWSTR_CHLD = 0,

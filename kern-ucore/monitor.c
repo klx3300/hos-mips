@@ -3,6 +3,7 @@
 #include <mmu.h>
 #include <trap.h>
 #include <monitor.h>
+#include <proc_debug.h>
 
 /* *
  * Simple command-line kernel monitor useful for controlling the
@@ -19,6 +20,8 @@ struct command {
 static struct command commands[] = {
 	{"help", "Display this list of commands.", mon_help},
 	{"kerninfo", "Display information about the kernel.", mon_kerninfo},
+	{"currproc", "Display the current process.", print_current_proc},
+	{"allproc", "Display all processes", print_all_proc},
 };
 
 /* return if kernel is panic, in kern/debug/panic.c */
@@ -82,6 +85,7 @@ static int runcmd(char *buf, struct trapframe *tf)
 
 void monitor(struct trapframe *tf)
 {
+	intr_disable();
 	kprintf("Welcome to the kernel debug monitor!!\n");
 	kprintf("Type 'help' for a list of commands.\n");
 
@@ -147,4 +151,17 @@ int mon_kerninfo(int argc, char **argv, struct trapframe *tf)
 {
 	print_kerninfo();
 	return 0;
+}
+
+int print_current_proc(int argc, char** argv, struct trapframe* tf){
+	struct proc_struct *current = pls_read(current);
+	dump_procstruct(current);
+}
+
+int print_all_proc(int argc, char** argv, struct trapframe* tf){
+	list_entry_t *list = &proc_list, *iter = &proc_list;
+	while((iter = list_next(iter)) != list){
+		struct proc_struct *proc = le2proc(iter, list_link);
+		dump_procstruct_short(proc);
+	}
 }
