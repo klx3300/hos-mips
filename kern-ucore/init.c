@@ -11,6 +11,8 @@
 #include <proc.h>
 #include <thumips_tlb.h>
 #include <sched.h>
+#include <ramdisk.h>
+#include <fs.h>
 
 void __noreturn kern_init(void)
 {

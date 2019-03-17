@@ -1,3 +1,11 @@
+# WARNING
+
+This code is currently madified by @imzhwk.
+
+Refer to branch `gxemul-adapt-basic` if you are coming to find how to execute it in simulator.
+
+
+
 This is a simple mips architecture OS in windows platform based on Tsinghua ucore OS. 
 
 For details about ucore, readers are refered to:
@@ -11,4 +19,6 @@ debug directory contains an useful app (portable PUTTY), bitstream file for Nexy
 After you set up the environment, you can just make and run the run.bat (UNCOMMENT the 2nd line to turn on/off the vivado work). The output will show in PUTTY.exe. (You may need to change the COM number in run.bat at line 3, this can be found by using PUTTY.EXE)
 
 The .vscode directory gives an example about how to use GDB to debug the OS in Visual Studio Code with the Native Debug extension. You can just run the run.bat and setup a breakpoint. Then press "F5" to debug in vscode.
+
+
 
