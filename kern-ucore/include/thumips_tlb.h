@@ -97,14 +97,23 @@ static inline void write_one_tlb(int index, unsigned int pagemask,
 	tlb_write_indexed();
 }
 
+extern uint32_t tlbwr_random_idx;
+
 static inline void tlb_replace_random(unsigned int pagemask, unsigned int hi,
 				      unsigned int low0, unsigned int low1)
 {
+    // our CPU did not implement the TLBWR instruction
+    // so we use this to mimic the behavior.
+    tlbwr_random_idx++;
+    if(tlbwr_random_idx >= 16){
+        tlbwr_random_idx = 0;
+    }
 	write_c0_entrylo0(low0);
 	write_c0_pagemask(pagemask);
 	write_c0_entrylo1(low1);
 	write_c0_entryhi(hi);
-	tlb_write_random();
+    write_c0_index(tlbwr_random_idx);
+	tlb_write_indexed();
 }
 
 static inline uint32_t pte2tlblow(pte_t pte)
